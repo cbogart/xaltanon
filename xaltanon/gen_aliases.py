@@ -16,8 +16,9 @@ class UserUnknown(Exception):
     pass
 
 class Aliases:
-    def __init__(self):
+    def __init__(self, prefix):
         self.aliases={}
+        self.prefix = prefix;
         self.numid = 1;
     def add_name(self, name):
         self.aliases[name] = { "numalias": self.numid }
@@ -42,8 +43,8 @@ class Aliases:
         return field
 
     def anonymize_username(self, name):
-        if name in aliases.aliases:
-            return "U" + str(self.aliases[name]["numalias"])
+        if name in self.aliases:
+            return self.prefix + str(self.aliases[name]["numalias"])
         else:
             raise UserUnknown("Couldn't find " + name)
     def anonymize_path(self, path):
@@ -51,12 +52,13 @@ class Aliases:
             (root,idnum,name) = find_root_id_name(path)
             newpath = path. \
                  replace(idnum, str(self.aliases[name]["numalias"])). \
-                 replace(name, "U" + str(self.aliases[name]["numalias"]))
+                 replace(name, self.prefix + str(self.aliases[name]["numalias"]))
             return newpath
         except NoUserInPath, ne:
             return path
         
-aliases = Aliases()
+users = Aliases("U")
+accounts = Aliases("A")
 others = set()
 roots = set()
 
@@ -72,24 +74,24 @@ def find_root_id_name(path):
         return (parts[0],parts[1],parts[2])
     raise NoUserInPath()
 
-def find_users_in_path_column(table, field):
+def find_users_in_path_column(table, field, users):
     print table + "." + field
     cur.execute("select " + field + " from " + table)
     for row in cur.fetchall():
         try:
             (root,idnum,name) = find_root_id_name(row[0])
             roots.add(root)
-            aliases.add_name_id(name, idnum)
+            users.add_name_id(name, idnum)
         except DuplicateIdForName, d:
             print str(d)
         except NoUserInPath:
             others.add(row[0])
 
-def find_users_in_user_column(table, field):
+def find_users_in_user_column(table, field, users):
     print table + "." + field
     cur.execute("select distinct(" + field + ") from " + table + " order by rand()")
     for row in cur.fetchall():
-        aliases.add_name(row[0])
+        users.add_name(row[0])
 
 class NiceCursorDescription:
     def __init__(self, cursor):
@@ -103,7 +105,7 @@ class NiceCursorDescription:
                "values (" + ",".join(["%s" for f in self.field_list()]) + ")"
     
 
-def anonymize_fields(table, fields):
+def anonymize_fields(users, accounts, table, fields):
     print table + ".(" + ",".join(fields) + ")"
 
     anontable = table + "_anon";
@@ -128,27 +130,39 @@ def anonymize_fields(table, fields):
             db.commit()
         newrow = list(row)
         for posn in posns:
-            newrow[posn] = aliases.anonymize(row[posn])
+            newrow[posn] = users.anonymize(row[posn])
+            if row[posn] == newrow[posn]:
+                try:
+                    newrow[posn] = accounts.anonymize(row[posn])
+                except Exception, e:
+                    print str(row), str(e)
+                    pass
         cur_insert.execute(inserter, tuple(newrow))
     db.commit()
         
     
 
-if (os.path.exists("aliases.json")):
-    with open("aliases.json") as f:
-        aliases.aliases = json.load(f)
+if (os.path.exists("users.json")):
+    with open("users.json") as f:
+        users.aliases = json.load(f)
+    with open("accounts.json") as f:
+        accounts.aliases = json.load(f)
 else:
     print "Building alias table\n"
-    find_users_in_user_column("XALT_RUN", "user")
-    find_users_in_path_column("XALT_RUN","exec_path")
-    find_users_in_path_column("XALT_RUN","cwd")
-    find_users_in_path_column("XALT_LINK","exec_path")
-    find_users_in_path_column("XALT_OBJECT","object_path")
-    with open("aliases.json", "w") as f:
-        f.write(json.dumps(aliases.aliases))
+    find_users_in_user_column("XALT_RUN", "user", users)
+    find_users_in_path_column("XALT_RUN","exec_path", users)
+    find_users_in_user_column("XALT_RUN", "account", accounts)
+    find_users_in_path_column("XALT_RUN","cwd", users)
+    find_users_in_path_column("XALT_LINK","exec_path", users)
+    find_users_in_user_column("XALT_LINK", "build_user", users)
+    find_users_in_path_column("XALT_OBJECT","object_path", users)
+    with open("users.json", "w") as f:
+        f.write(json.dumps(users.aliases, indent=4))
+    with open("accounts.json", "w") as f:
+        f.write(json.dumps(accounts.aliases, indent=4))
         
 print "Replacing usernames with aliases\n"
-anonymize_fields("xalt_run", ["user", "cwd", "exec_path"])
-anonymize_fields("xalt_link", ["exec_path"])
-anonymize_fields("xalt_object", ["object_path"])
+anonymize_fields(users, accounts, "xalt_run", ["user", "cwd", "exec_path", "account"])
+anonymize_fields(users, accounts, "xalt_link", ["exec_path", "build_user"])
+anonymize_fields(users, accounts, "xalt_object", ["object_path"])
 
