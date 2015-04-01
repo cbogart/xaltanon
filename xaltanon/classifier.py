@@ -11,6 +11,7 @@ import os
 import pdb
 from collections import defaultdict
 
+
 def load_matcher():
     """Prepare a dictionary of keywords to look for in execution paths"""
     with open("appinfo.XALT.json","r") as f:
@@ -22,6 +23,14 @@ def load_matcher():
 def splitup(path):
     parts = re.split(r"""[_/,\.;:+=-]""", path)
     return [p.lower() for p in parts]
+
+def guess_unclassified_app(exec_path):
+    try:
+        return re.search(r"([a-zA-Z]{3,})", exec_path.split("/")[-1]).group(0)
+    except:
+        return ""
+    
+assert guess_unclassified_app("a/b/3cdef4.exe") == "cdef", "guess_unclassified_app" + guess_unclassified_app("a/b/3cdef4.exe")
 
 def classify(exec_path, matcher):
     candidates = []
@@ -55,23 +64,45 @@ if __name__ == '__main__':
                       db="xalt") # name of the data base
     cur = db.cursor()
     
-    cur.execute("select distinct(exec_path) from xalt_run_anon;")
+    cur.execute("select exec_path, user from xalt_run_anon;")
     bad_cloud = defaultdict(int)
     found = 0
     not_found = 0
+    app_counts = defaultdict(int)
+    app_versions = defaultdict(set)
+    unknown_app_users = defaultdict(set)
+    unknown_app_count = defaultdict(int)
     try:
         for row in cur.fetchall():
+            if ((found + not_found) % 1000 == 0):
+                print "Found", found, "out of", (found + not_found), "examined so far"
             exec_path = row[0]
+            username = row[1]
             (package, version) =  classify(exec_path, matcher)
             if len(package) > 0:
-                print package + "/" + version, exec_path
+                #print package + "/" + version, exec_path
                 found+=1
+                app_counts[package] += 1
+                if len(version) > 0:
+                    app_versions[package].add(version)
             else:
-                print "not found: ", exec_path
                 not_found += 1
+                package = guess_unclassified_app(exec_path)
+                unknown_app_count[package] += 1
+                unknown_app_users[package].add(username)
                 for part in splitup(exec_path):
                     bad_cloud[part.lower()]+=1
     finally:
+        print "Known apps----------------------"
+        for app in sorted(app_counts.keys()):
+            print app, app_counts[app]
+        print "Known app versions----------------------"
+        for app in sorted(app_counts.keys()):
+            print app, app_counts[app], "versions:", ",".join(app_versions[app])
+        print "Unknown apps---------------------"
+        for app in sorted(unknown_app_count.keys()):
+            if len(unknown_app_users[app]) >= 5:
+                print app, unknown_app_count[app]
         print "Found percentage", (found*100/(found+not_found))
-        print "Tag cloud dump:"
-        print json.dumps(sorted([(bad_cloud[k], k) for k in bad_cloud], key=lambda (p,v): -p)[0:400])
+        #print "Tag cloud dump:"
+        #print json.dumps(sorted([(bad_cloud[k], k) for k in bad_cloud], key=lambda (p,v): -p)[0:400])
