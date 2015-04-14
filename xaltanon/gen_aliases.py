@@ -56,17 +56,7 @@ class Aliases:
             return newpath
         except NoUserInPath, ne:
             return path
-        
-users = Aliases("U")
-accounts = Aliases("A")
-others = set()
-roots = set()
-
-db = MySQLdb.connect(host="localhost", # your host, usually localhost
-                     user="root", # your username
-                      passwd="", # your password
-                      db="xalt") # name of the data base
-cur = db.cursor() 
+    
 
 def find_root_id_name(path):
     parts = [p for p in path.split("/") if len(p) > 0]
@@ -74,7 +64,7 @@ def find_root_id_name(path):
         return (parts[0],parts[1],parts[2])
     raise NoUserInPath()
 
-def find_users_in_path_column(table, field, users):
+def find_users_in_path_column(cur, table, field, users, roots, others):
     print table + "." + field
     cur.execute("select " + field + " from " + table)
     for row in cur.fetchall():
@@ -87,7 +77,7 @@ def find_users_in_path_column(table, field, users):
         except NoUserInPath:
             others.add(row[0])
 
-def find_users_in_user_column(table, field, users):
+def find_users_in_user_column(cur, table, field, users):
     print table + "." + field
     cur.execute("select distinct(" + field + ") from " + table + " order by rand()")
     for row in cur.fetchall():
@@ -105,7 +95,7 @@ class NiceCursorDescription:
                "values (" + ",".join(["%s" for f in self.field_list()]) + ")"
     
 
-def anonymize_fields(users, accounts, table, fields):
+def anonymize_fields(db, cur, users, accounts, table, fields):
     print table + ".(" + ",".join(fields) + ")"
 
     anontable = table + "_anon";
@@ -141,28 +131,46 @@ def anonymize_fields(users, accounts, table, fields):
     db.commit()
         
     
+def generate_alias_files(cur):
+    users = Aliases("U")
+    accounts = Aliases("A")
+    others = set()
+    roots = set()
 
-if (os.path.exists("users.json")):
-    with open("users.json") as f:
-        users.aliases = json.load(f)
-    with open("accounts.json") as f:
-        accounts.aliases = json.load(f)
-else:
-    print "Building alias table\n"
-    find_users_in_user_column("XALT_RUN", "user", users)
-    find_users_in_path_column("XALT_RUN","exec_path", users)
-    find_users_in_user_column("XALT_RUN", "account", accounts)
-    find_users_in_path_column("XALT_RUN","cwd", users)
-    find_users_in_path_column("XALT_LINK","exec_path", users)
-    find_users_in_user_column("XALT_LINK", "build_user", users)
-    find_users_in_path_column("XALT_OBJECT","object_path", users)
-    with open("users.json", "w") as f:
-        f.write(json.dumps(users.aliases, indent=4))
-    with open("accounts.json", "w") as f:
-        f.write(json.dumps(accounts.aliases, indent=4))
-        
-print "Replacing usernames with aliases\n"
-anonymize_fields(users, accounts, "xalt_run", ["user", "cwd", "exec_path", "account"])
-anonymize_fields(users, accounts, "xalt_link", ["exec_path", "build_user"])
-anonymize_fields(users, accounts, "xalt_object", ["object_path"])
+    if (os.path.exists("users.json")):
+        with open("users.json") as f:
+            users.aliases = json.load(f)
+        with open("accounts.json") as f:
+            accounts.aliases = json.load(f)
+    else:
+        print "Building alias table\n"
+        find_users_in_user_column(cur, "XALT_RUN", "user", users, roots, others)
+        find_users_in_path_column(cur, "XALT_RUN","exec_path", users, roots, others)
+        find_users_in_user_column(cur, "XALT_RUN", "account", accounts, roots, others)
+        find_users_in_path_column(cur, "XALT_RUN","cwd", users, roots, others)
+        find_users_in_path_column(cur, "XALT_LINK","exec_path", users, roots, others)
+        find_users_in_user_column(cur, "XALT_LINK", "build_user", users, roots, others)
+        find_users_in_path_column(cur, "XALT_OBJECT","object_path", users, roots, others)
+        with open("users.json", "w") as f:
+            f.write(json.dumps(users.aliases, indent=4))
+        with open("accounts.json", "w") as f:
+            f.write(json.dumps(accounts.aliases, indent=4))
+            
+    return (users, accounts, others, roots)
 
+def anonymize_in_place():
+    db1 = MySQLdb.connect(host="localhost", # your host, usually localhost
+                     user="root", # your username
+                      passwd="", # your password
+                      db="xalt") # name of the data base
+    cur1 = db1.cursor() 
+
+    (users, accounts, others, roots) = generate_alias_files(cur1)
+            
+    print "Replacing usernames with aliases\n"
+    anonymize_fields(db1, cur1, users, accounts, "xalt_run", ["user", "cwd", "exec_path", "account"])
+    anonymize_fields(db1, cur1, users, accounts, "xalt_link", ["exec_path", "build_user"])
+    anonymize_fields(db1, cur1, users, accounts, "xalt_object", ["object_path"])
+
+if __name__ == '__main__':
+    anonymize_in_place()

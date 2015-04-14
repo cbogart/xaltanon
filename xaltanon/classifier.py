@@ -24,6 +24,12 @@ def splitup(path):
     parts = re.split(r"""[_/,\.;:+=-]""", path)
     return [p.lower() for p in parts]
 
+def just_alpha_words(path):
+    parts = re.split(r"""[^a-zA-Z]*""", path)
+    return [p.lower() for p in parts if len(p) >= 3]
+
+assert just_alpha_words("a/b/word234x") == ["word"], "just_alpha_words returned " + str(just_alpha_words("a/b/word234x"))
+
 def guess_unclassified_app(exec_path):
     try:
         return re.search(r"([a-zA-Z]{3,})", exec_path.split("/")[-1]).group(0)
@@ -31,12 +37,14 @@ def guess_unclassified_app(exec_path):
         return ""
     
 assert guess_unclassified_app("a/b/3cdef4.exe") == "cdef", "guess_unclassified_app" + guess_unclassified_app("a/b/3cdef4.exe")
-
+import pdb
 def classify(exec_path, matcher):
     candidates = []
     possibles = set([p.lower() for p in exec_path.split("/")]).intersection(set(matcher.keys()))
     if len(possibles) == 0:
         possibles = set(splitup(exec_path)).intersection(set(matcher.keys()))
+    if len(possibles) == 0:
+        possibles = set(just_alpha_words(exec_path)).intersection(set(matcher.keys()))
     for package in possibles:
         try:
             versionmatch = re.search(matcher[package]["versionPattern"], exec_path).group(0)
@@ -44,6 +52,11 @@ def classify(exec_path, matcher):
             versionmatch = ""
         candidates = candidates + [ (matcher[package]["title"], versionmatch)]
     candidates.sort(key = lambda (p,v): len(p)*len(v))
+
+    if "python" in exec_path and (len(candidates) == 0 or candidates[0][0] != "Python"):
+        print exec_path, "\t", candidates
+        #pdb.set_trace()
+
     return candidates[0] if len(candidates) > 0 else ("","")
             
 def assertEquals(a, b):
